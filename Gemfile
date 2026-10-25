@@ -14,3 +14,7 @@ group :test do
   gem "html-proofer"
 end
 gem "webrick", "~> 1.7"
+gem "logger"
+gem "csv"
+gem "base64"
+gem "bigdecimal"
