@@ -1,0 +1,369 @@
+<blockquote>
+  <p><strong>Any actions and or activities related to the material contained within this Website is solely your responsibility. This site contains materials that can be potentially damaging or dangerous. If you do not fully understand something on this site, then GO OUT OF HERE! Refer to the laws in your province/country before accessing, using,or in any other way utilizing these materials.These materials are for educational and research purposes only.</strong></p>
+</blockquote>
+
+<h2 id="ringkasan"><strong><span style="color:#ff5555">Ringkasan</span></strong></h2>
+<hr />
+
+<p>PHP2Shell adalah nama yang diberikan untuk dua kerentanan kritis pada PHP core yang ditemukan oleh tim Wiz Research pada Agustus 2026. Kerentanan ini memiliki skor <strong>CVSS 9.2</strong> dan mempengaruhi <strong>semua versi PHP sejak 5.4</strong> (dirilis tahun 2012), yang berarti sekitar 70% dari seluruh website di internet berpotensi terdampak.</p>
+
+<ul>
+  <li><strong>CVE-2026-109618</strong> — Upload-progress unserializer use-after-free → Memory disclosure &amp; RCE</li>
+  <li><strong>CVE-2026-109619</strong> — Fatal-error backtrace use-after-free + OPcache type confusion → RCE</li>
+</ul>
+
+<p>Keduanya memungkinkan <strong>unauthenticated Remote Code Execution</strong> — penyerang hanya membutuhkan satu HTTP request yang ter-craft khusus, tanpa login apapun.</p>
+
+<h2 id="versi-php-yang-terdampak"><strong><span style="color:#ff5555">Versi PHP yang Terdampak</span></strong></h2>
+<hr />
+
+<p>Bug ini ada di setiap PHP yang belum di-patch sejak versi 5.4. PHP merilis patch pada <strong>21 Oktober 2026</strong>.</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Branch</th>
+      <th>Fixed Version</th>
+      <th>Status</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>8.5</td>
+      <td>8.5.12</td>
+      <td>Active support s/d 31 Des 2027</td>
+    </tr>
+    <tr>
+      <td>8.4</td>
+      <td>8.4.27</td>
+      <td>Active support s/d 31 Des 2026</td>
+    </tr>
+    <tr>
+      <td>8.3</td>
+      <td>8.3.36</td>
+      <td>Security-only s/d 31 Des 2027</td>
+    </tr>
+    <tr>
+      <td>8.2</td>
+      <td>8.2.35</td>
+      <td>Security-only s/d 31 Des 2026</td>
+    </tr>
+    <tr>
+      <td>8.1, 8.0, 7.4</td>
+      <td>Backport minimal</td>
+      <td>End of Life</td>
+    </tr>
+    <tr>
+      <td>7.3 ke bawah</td>
+      <td>Tidak ada fix</td>
+      <td>End of Life</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="teknis-bagaimana-php2shell-bekerja"><strong><span style="color:#ff5555">Teknis: Bagaimana PHP2Shell Bekerja</span></strong></h2>
+<hr />
+
+<p>Untuk memahami PHP2Shell, kita perlu mengerti bagaimana PHP menangani request di level internal, khususnya fitur <code class="language-plaintext highlighter-rouge">session.upload_progress</code>.</p>
+
+<h3 id="session-upload-progress">Session Upload Progress</h3>
+
+<p>PHP memiliki fitur bawaan bernama <code class="language-plaintext highlighter-rouge">session.upload_progress</code> yang melacak progress file upload. Fitur ini <strong>aktif secara default</strong> dan berjalan <strong>sebelum kode aplikasi dieksekusi</strong> — artinya, bahkan jika aplikasi tidak pernah memanggil <code class="language-plaintext highlighter-rouge">session_start()</code>, fitur ini tetap aktif.</p>
+
+<p>Ketika PHP menerima <code class="language-plaintext highlighter-rouge">multipart/form-data</code> request dengan field <code class="language-plaintext highlighter-rouge">PHP_SESSION_UPLOAD_PROGRESS</code>, PHP secara otomatis:</p>
+
+<ol>
+  <li>Menginisialisasi session handler</li>
+  <li>Mem-parse dan men-decode data session</li>
+  <li>Menjalankan unserializer untuk me-restore session state</li>
+</ol>
+
+<p>Semua ini terjadi di <strong>pre-initialization window</strong> — sebelum module-module PHP normal diinisialisasi sepenuhnya.</p>
+
+<h3 id="bug-1-upload-progress-unserializer-use-after-free-cve-2026-109618">Bug 1: Upload-Progress Unserializer Use-After-Free (CVE-2026-109618)</h3>
+
+<p>Ini adalah bug utama. Alurnya:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>[Request 1 - Trigger]
+     │
+     ├── PHP menerima multipart/form-data request
+     ├── Session upload-progress handler aktif
+     ├── Unserializer mulai decode session data
+     ├── Bookkeeping state disimpan di BG(unserialize)
+     ├── ⚠ Fatal allocation failure (OOM) terjadi di tengah proses
+     ├── Request heap di-destroy
+     └── BG(unserialize) global state TETAP TERPUBLISH (stale)
+
+[Request 2 - Exploit] (di-handle worker yang sama)
+     │
+     ├── PHP menggunakan BG(unserialize) yang stale
+     ├── Worker mengakses freed memory sebagai live bookkeeping
+     ├── Attacker telah mereclaim memory tersebut
+     └── ⚠ MEMORY CORRUPTION → RCE
+</code></pre></div></div>
+
+<p>Yang terjadi secara teknis:</p>
+
+<ol>
+  <li>PHP Session module men-decode session data saat upload-progress handling</li>
+  <li>Decoder menyimpan request-owned bookkeeping di <code class="language-plaintext highlighter-rouge">BG(unserialize)</code> (sebuah global state)</li>
+  <li>Fatal allocation failure (OOM) menginterupsi proses ini</li>
+  <li>Request heap di-destroy, tapi global state <code class="language-plaintext highlighter-rouge">BG(unserialize)</code> <strong>tidak di-cleanup</strong></li>
+  <li>Pada request berikutnya oleh worker yang sama, PHP membaca <code class="language-plaintext highlighter-rouge">BG(unserialize)</code> yang sudah stale</li>
+  <li>Memory yang ditunjuk sudah di-free dan bisa di-reclaim oleh penyerang</li>
+  <li>Ini menjadi <strong>memory-corruption primitive</strong> yang powerful</li>
+</ol>
+
+<h3 id="bug-2-remote-process-memory-disclosure-cve-2026-109618">Bug 2: Remote Process-Memory Disclosure (CVE-2026-109618)</h3>
+
+<p>Bug yang sama juga memungkinkan <strong>memory disclosure</strong>:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>[Request]
+     │
+     ├── Multipart request dikirim
+     ├── Upload-progress handler menginisialisasi Session state
+     ├── Session ID dipublish di PS(id)
+     ├── ⚠ OOM error → request abort sebelum cleanup selesai
+     ├── PHP men-destroy request memory, TAPI...
+     ├── Session ID (PS(id)) masih menunjuk ke freed memory
+     └── PHPSESSID response cookie berisi FREED WORKER MEMORY
+          └── 🔓 Bisa mengandung: passwords, session tokens,
+              API keys, TLS private keys dari request lain
+</code></pre></div></div>
+
+<h3 id="bug-3-fatal-error-backtrace-use-after-free-cve-2026-109619">Bug 3: Fatal-Error Backtrace Use-After-Free (CVE-2026-109619)</h3>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>[Request 1]
+     │
+     ├── Fatal error terjadi (misal OOM)
+     ├── Error handler menyimpan backtrace
+     ├── Request memory di-deallocate
+     └── Backtrace pointer tetap ada di global state
+
+[Request 2] (worker yang sama)
+     │
+     ├── Worker mengakses dangling backtrace pointer
+     ├── Memory sudah di-reclaim attacker
+     └── ⚠ Cross-request use-after-free → MEMORY CORRUPTION → RCE
+</code></pre></div></div>
+
+<h3 id="bug-4-opcache-type-confusion-cve-2026-109619">Bug 4: OPcache Type Confusion (CVE-2026-109619)</h3>
+
+<p>OPcache menyimpan compiled PHP structures di shared memory dengan index ke per-worker runtime-pointer maps:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>[Normal Flow]
+     Worker A: zend_accel_script_persist()
+     ├── Advance CG(map_ptr_last) [process-local frontier]
+     ├── Persist objects ke shared memory
+     └── Publish shared frontier ✓ (sinkron)
+
+[Vulnerable Flow]
+     Worker A: zend_accel_script_persist()
+     ├── Advance CG(map_ptr_last) [process-local frontier]
+     ├── ⚠ Allocation failure di TENGAH persistence
+     ├── Process-local frontier sudah maju
+     ├── Shared frontier BELUM diupdate
+     └── Partially persisted objects merujuk ke slots
+         yang shared state anggap masih "available"
+
+[Exploitation]
+     Worker B:
+     ├── Menggunakan slot yang "available" untuk object berbeda
+     ├── Stale shared metadata resolve ke pointer WRONG TYPE
+     └── ⚠ Cross-worker TYPE CONFUSION → corrupt OPcache → RCE
+</code></pre></div></div>
+
+<h2 id="rantai-eksploitasi"><strong><span style="color:#ff5555">Rantai Eksploitasi</span></strong></h2>
+<hr />
+
+<p>Tim Wiz mendemonstrasikan unauthenticated RCE pada instalasi default <strong>WordPress</strong>, <strong>Drupal</strong>, dan <strong>Joomla</strong> dengan menggabungkan bug-bug di atas:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>Langkah 1: Memory Disclosure (CVE-2026-109618)
+    │  Kirim crafted multipart request
+    │  Trigger OOM pada upload-progress handler
+    │  Baca freed memory dari PHPSESSID cookie
+    │  → Dapatkan alamat memory (bypass ASLR)
+    │
+Langkah 2: Memory Corruption (CVE-2026-109618 + CVE-2026-109619)
+    │  Gunakan alamat memory untuk craft payload
+    │  Trigger use-after-free pada unserializer
+    │  Reclaim freed memory dengan controlled data
+    │  → Arbitrary code execution
+    │
+Langkah 3: Shell Access
+    └── Eksekusi command sebagai user PHP worker
+        (www-data, apache, nginx, dll)
+</code></pre></div></div>
+
+<p>Semua SAPI PHP terdampak: <strong>mod_php</strong>, <strong>PHP-FPM</strong>, <strong>php-cgi</strong>, <strong>FrankenPHP</strong>, dan <strong>LiteSpeed</strong>.</p>
+
+<h2 id="vektor-serangan"><strong><span style="color:#ff5555">Vektor Serangan</span></strong></h2>
+<hr />
+
+<p>Setiap teknik yang diketahui menggunakan <code class="language-plaintext highlighter-rouge">multipart/form-data</code> request — format yang digunakan browser untuk file upload. PHP mem-parse body ini <strong>sebelum kode aplikasi berjalan</strong>, sehingga:</p>
+
+<ul>
+  <li>Tidak perlu autentikasi</li>
+  <li>Tidak perlu endpoint upload yang valid</li>
+  <li>Tidak perlu aplikasi yang menggunakan session</li>
+  <li>Cukup PHP yang berjalan dengan konfigurasi default</li>
+</ul>
+
+<h2 id="deteksi"><strong><span style="color:#ff5555">Deteksi</span></strong></h2>
+<hr />
+
+<p>Sinyal yang perlu dimonitor:</p>
+
+<ol>
+  <li><strong>Request anomali</strong> — Multipart request yang tidak biasa ke endpoint yang bukan upload</li>
+  <li><strong>Memory errors</strong> — <code class="language-plaintext highlighter-rouge">memory_limit</code> errors saat request initialization</li>
+  <li><strong>HTTP 500 berulang</strong> — Repeated server errors dari PHP worker yang sama</li>
+  <li><strong>PHPSESSID cookie anomali</strong> — Cookie yang berukuran besar atau berisi data yang tidak wajar (bisa mengandung leaked memory)</li>
+  <li><strong>Unexpected process spawning</strong> — <code class="language-plaintext highlighter-rouge">php-fpm</code>, <code class="language-plaintext highlighter-rouge">httpd</code>, atau <code class="language-plaintext highlighter-rouge">apache2</code> menjalankan shell, <code class="language-plaintext highlighter-rouge">curl</code>, atau <code class="language-plaintext highlighter-rouge">wget</code></li>
+</ol>
+
+<p>Contoh rule deteksi di log:</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># Cari multipart request yang mencurigakan di access log</span>
+<span class="nb">grep</span> <span class="nt">-E</span> <span class="s1">'multipart/form-data.*PHP_SESSION_UPLOAD_PROGRESS'</span> /var/log/nginx/access.log
+
+<span class="c"># Monitor unexpected child processes dari PHP</span>
+ps aux | <span class="nb">grep</span> <span class="nt">-E</span> <span class="s1">'(php-fpm|httpd|apache2)'</span> | <span class="nb">grep</span> <span class="nt">-v</span> <span class="nb">grep</span>
+
+<span class="c"># Cek error log untuk OOM patterns</span>
+<span class="nb">grep</span> <span class="nt">-E</span> <span class="s1">'Allowed memory size.*exhausted'</span> /var/log/php<span class="k">*</span>.log
+</code></pre></div></div>
+
+<h2 id="mitigasi"><strong><span style="color:#ff5555">Mitigasi</span></strong></h2>
+<hr />
+
+<h3 id="1-update-php-satu-satunya-solusi-lengkap">1. Update PHP (Satu-satunya Solusi Lengkap)</h3>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># Cek versi PHP saat ini</span>
+php <span class="nt">-v</span>
+
+<span class="c"># Update ke versi yang sudah di-patch</span>
+<span class="c"># Debian/Ubuntu</span>
+<span class="nb">sudo </span>apt update <span class="o">&amp;&amp;</span> <span class="nb">sudo </span>apt <span class="nb">install </span>php8.3
+
+<span class="c"># CentOS/RHEL</span>
+<span class="nb">sudo </span>yum update php
+
+<span class="c"># Verifikasi</span>
+php <span class="nt">-v</span>
+<span class="c"># Pastikan versi &gt;= 8.2.35, 8.3.36, 8.4.27, atau 8.5.12</span>
+</code></pre></div></div>
+
+<h3 id="2-mitigasi-sementara-disable-session-upload-progress">2. Mitigasi Sementara: Disable Session Upload Progress</h3>
+
+<p>Untuk <strong>mod_php</strong> — edit <code class="language-plaintext highlighter-rouge">php.ini</code>:</p>
+
+<div class="language-ini highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="py">session.upload_progress.enabled</span> <span class="p">=</span> <span class="s">0</span>
+<span class="py">memory_limit</span> <span class="p">=</span> <span class="s">-1</span>
+</code></pre></div></div>
+
+<p>Untuk <strong>PHP-FPM</strong> — edit pool config (misal <code class="language-plaintext highlighter-rouge">/etc/php/8.3/fpm/pool.d/www.conf</code>):</p>
+
+<div class="language-ini highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="err">php_admin_flag</span><span class="nn">[session.upload_progress.enabled]</span> <span class="err">=</span> <span class="err">off</span>
+<span class="err">php_admin_value</span><span class="nn">[memory_limit]</span> <span class="err">=</span> <span class="err">-1</span>
+</code></pre></div></div>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># Restart PHP-FPM setelah perubahan</span>
+<span class="nb">sudo </span>systemctl reload php8.3-fpm
+</code></pre></div></div>
+
+<blockquote>
+  <p>⚠ PHP core developer Gina Peter Banyard memperingatkan bahwa mematikan session upload progress saja <strong>tidak cukup</strong>. Kombinasikan dengan block multipart di web server.</p>
+</blockquote>
+
+<h3 id="3-mitigasi-sementara-block-multipart-request-di-web-server">3. Mitigasi Sementara: Block Multipart Request di Web Server</h3>
+
+<p><strong>Nginx:</strong></p>
+
+<div class="language-nginx highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># Tambahkan ke setiap server block yang forward ke PHP</span>
+<span class="k">if</span> <span class="s">(</span><span class="nv">$http_content_type</span> <span class="p">~</span><span class="sr">*</span> <span class="s">"multipart/form-data")</span> <span class="p">{</span>
+    <span class="kn">return</span> <span class="mi">403</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>nginx <span class="nt">-t</span> <span class="o">&amp;&amp;</span> <span class="nb">sudo </span>systemctl reload nginx
+</code></pre></div></div>
+
+<p><strong>Apache:</strong></p>
+
+<div class="language-apache highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># Tambahkan ke setiap &lt;VirtualHost&gt; yang serve PHP</span>
+<span class="nc">RewriteEngine</span> <span class="ss">On</span>
+<span class="nc">RewriteCond</span> %{HTTP:Content-Type} multipart/form-data [NC]
+<span class="nc">RewriteRule</span> ^ - [F]
+</code></pre></div></div>
+
+<blockquote>
+  <p>⚠ Rule ini akan <strong>memblokir semua file upload</strong>, termasuk upload gambar di admin panel. Test fungsionalitas setelah menerapkan, dan hapus rule setelah PHP di-update.</p>
+</blockquote>
+
+<h2 id="timeline"><strong><span style="color:#ff5555">Timeline</span></strong></h2>
+<hr />
+
+<table>
+  <thead>
+    <tr>
+      <th>Tanggal</th>
+      <th>Event</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>19 Agustus 2026</td>
+      <td>Wiz Research menemukan bug pertama menggunakan AI (Gemini 4 Argon + GPT-5.6 Sol)</td>
+    </tr>
+    <tr>
+      <td>20 Agustus 2026</td>
+      <td>Unauthenticated RCE dikonfirmasi terhadap Drupal</td>
+    </tr>
+    <tr>
+      <td>21 Agustus 2026</td>
+      <td>Unauthenticated RCE dikonfirmasi terhadap WordPress</td>
+    </tr>
+    <tr>
+      <td>24 Agustus 2026</td>
+      <td>Wiz melaporkan kerentanan ke PHP security team</td>
+    </tr>
+    <tr>
+      <td>21 September 2026</td>
+      <td>PHP acknowledge dan mulai develop fix</td>
+    </tr>
+    <tr>
+      <td>21 Oktober 2026</td>
+      <td>Patch PHP dirilis + Public disclosure</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="vendor-yang-terdampak"><strong><span style="color:#ff5555">Vendor yang Terdampak</span></strong></h2>
+<hr />
+
+<p>Selain CMS populer, beberapa vendor infrastruktur juga terdampak:</p>
+
+<ul>
+  <li><strong>Palo Alto Networks</strong> — PAN-OS 12.2, 12.1, 11.2, 11.1, 10.2 dan semua versi Panorama. Belum ada fixed release, tersedia Threat Prevention signatures (Threat IDs 543004, 97622-97625).</li>
+  <li><strong>Cisco</strong> — Expressway dan Expressway Select (CSCwx37062) rated Critical, fix di 15.5.21. Snort rules 67359 dan 67360 tersedia.</li>
+  <li><strong>Fortinet</strong> — FortiADC Manager, FortiClient Cloud Services, FortiDDoS sedang dalam investigasi.</li>
+</ul>
+
+<h2 id="kesimpulan"><strong><span style="color:#ff5555">Kesimpulan</span></strong></h2>
+<hr />
+
+<p>PHP2Shell adalah kerentanan level engine yang berjalan <strong>di bawah layer aplikasi</strong>. Tidak ada kode PHP yang bisa memperbaiki ini — Anda harus update PHP itu sendiri. Kerentanan ini dibandingkan dengan <strong>Heartbleed</strong> dan <strong>Log4Shell</strong> karena skala dampaknya yang masif.</p>
+
+<p><strong>Jika Anda menjalankan server PHP, update sekarang.</strong></p>
+
+<h2 id="referensi"><strong><span style="color:#ff5555">Referensi</span></strong></h2>
+<hr />
+
+<ul>
+  <li>Wiz Research — <a href="https://www.wiz.io/blog/php2shell-php-rce">PHP2Shell: AI uncovers critical RCE vulnerabilities affecting 70% of the Internet</a></li>
+  <li>watchTowr — <a href="https://watchtowr.com/intelligence/php-remote-code-execution-php2shell/">PHP2Shell RCE Exploited: CVE-2026-109618 &amp; CVE-2026-109619</a></li>
+  <li>Sansec — <a href="https://sansec.io/research/php2shell">PHP2Shell: PHP RCE (CVE-2026-109618, CVE-2026-109619)</a></li>
+  <li>SOCRadar — <a href="https://socradar.io/blog/php2shell-cve-2026-109618-cve-2026-109619/">PHP2Shell: Critical PHP RCE Flaws, Affected Versions, and How to Fix Them</a></li>
+  <li>SentinelOne — <a href="https://www.sentinelone.com/blog/stopping-php2shell-how-sentinelone-protects-customers-from-this-attack-technique/">Stopping PHP2SHELL</a></li>
+</ul>
