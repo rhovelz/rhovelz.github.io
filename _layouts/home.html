@@ -70,10 +70,12 @@ layout: page
           <img src="{{post.image}}" alt="{{post.title}} image" class="post-img">
         </a>
       </div>
+      {% unless post.image %}
       <p>
         {% include no-linenos.html content=post.content %}
         {{ content | markdownify | strip_html | truncate: 200 }}
       </p>
+      {% endunless %}
     </div>
 
     <div class="post-meta text-muted">
