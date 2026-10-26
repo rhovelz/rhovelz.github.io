@@ -1,0 +1,19 @@
+current directory: /home/xv4nz7/MyGit/rhovelz.github.io/vendor/bundle/ruby/3.3.0/gems/http_parser.rb-0.8.0/ext/ruby_http_parser
+/usr/bin/ruby3.3 -I/usr/lib/ruby/vendor_ruby extconf.rb
+creating Makefile
+
+current directory: /home/xv4nz7/MyGit/rhovelz.github.io/vendor/bundle/ruby/3.3.0/gems/http_parser.rb-0.8.0/ext/ruby_http_parser
+make -j9 DESTDIR\= sitearchdir\=./.gem.20261026-97798-av0hhz sitelibdir\=./.gem.20261026-97798-av0hhz clean
+
+current directory: /home/xv4nz7/MyGit/rhovelz.github.io/vendor/bundle/ruby/3.3.0/gems/http_parser.rb-0.8.0/ext/ruby_http_parser
+make -j9 DESTDIR\= sitearchdir\=./.gem.20261026-97798-av0hhz sitelibdir\=./.gem.20261026-97798-av0hhz
+compiling ruby_http_parser.c
+compiling ryah_http_parser.c
+linking shared-object ruby_http_parser.so
+
+current directory: /home/xv4nz7/MyGit/rhovelz.github.io/vendor/bundle/ruby/3.3.0/gems/http_parser.rb-0.8.0/ext/ruby_http_parser
+make -j9 DESTDIR\= sitearchdir\=./.gem.20261026-97798-av0hhz sitelibdir\=./.gem.20261026-97798-av0hhz install
+/usr/bin/install -c -m 0755 ruby_http_parser.so ./.gem.20261026-97798-av0hhz
+
+current directory: /home/xv4nz7/MyGit/rhovelz.github.io/vendor/bundle/ruby/3.3.0/gems/http_parser.rb-0.8.0/ext/ruby_http_parser
+make DESTDIR\= sitearchdir\=./.gem.20261026-97798-av0hhz sitelibdir\=./.gem.20261026-97798-av0hhz clean
